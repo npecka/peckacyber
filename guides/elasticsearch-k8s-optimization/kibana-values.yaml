@@ -1,0 +1,67 @@
+---
+# Kibana Helm Chart Values
+# Optimized for homelab Kubernetes deployment
+# Reference: https://github.com/elastic/helm-charts/tree/main/kibana
+
+image: "docker.elastic.co/kibana/kibana"
+imageTag: "8.5.1"
+
+replicas: 1
+
+# Resource allocation
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "1000m"
+  limits:
+    memory: "2Gi"
+    cpu: "1000m"
+
+# Elasticsearch connection
+# Assumes Elasticsearch is deployed in the same namespace
+elasticsearchHosts: "https://elasticsearch-master:9200"
+
+# Environment variables
+extraEnvs:
+  - name: "ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES"
+    value: "/usr/share/kibana/config/certs/ca.crt"
+  - name: "SERVER_HOST"
+    value: "0.0.0.0"
+  # Node.js memory limit - prevents OOM in constrained environments
+  - name: "NODE_OPTIONS"
+    value: "--max-old-space-size=1800"
+
+# Mount Elasticsearch certificates for SSL
+secretMounts:
+  - name: elasticsearch-certs
+    secretName: elasticsearch-master-certs
+    path: /usr/share/kibana/config/certs
+    readOnly: true
+
+# Security context - run as non-root
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  runAsNonRoot: true
+  runAsUser: 1000
+
+podSecurityContext:
+  fsGroup: 1000
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 5601
+
+# Health checks
+readinessProbe:
+  failureThreshold: 3
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  successThreshold: 3
+  timeoutSeconds: 5
+
+# Authentication:
+# Kibana uses a service account token to authenticate with Elasticsearch.
+# See the deployment guide (GUIDE.md) for commands to create the token secret.

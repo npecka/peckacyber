@@ -1,0 +1,48 @@
+# Secrets and credentials
+*.key
+*.crt
+*.pem
+*secret*
+*password*
+*credentials*
+
+# Environment files
+.env
+.env.local
+*.env
+
+# Kubernetes secrets
+*-secret.yaml
+*-secrets.yaml
+
+# Internal notes and documentation
+INTERNAL.md
+PRIVATE.md
+.internal/
+.private/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Terraform state (if used in future)
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

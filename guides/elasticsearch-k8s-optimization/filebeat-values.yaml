@@ -1,0 +1,152 @@
+---
+# Filebeat Helm Chart Values
+# Optimized for Kubernetes log collection in homelab
+# Reference: https://github.com/elastic/helm-charts/tree/main/filebeat
+
+image: "docker.elastic.co/beats/filebeat"
+imageTag: "8.5.1"
+imagePullPolicy: "IfNotPresent"
+
+# Deploy as DaemonSet (one pod per node)
+daemonset:
+  enabled: true
+
+deployment:
+  enabled: false
+
+# Cluster role for reading pod metadata
+clusterRoleRules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - pods
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+
+# Resource limits
+resources:
+  requests:
+    cpu: "100m"
+    memory: "100Mi"
+  limits:
+    cpu: "200m"
+    memory: "200Mi"
+
+# Environment variables
+extraEnvs:
+  - name: ELASTICSEARCH_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: elasticsearch-master-credentials
+        key: password
+
+# Volume mounts for certificates and credentials
+secretMounts:
+  - name: elasticsearch-master-certs
+    secretName: elasticsearch-master-certs
+    path: /usr/share/filebeat/certs/
+  - name: elasticsearch-credentials
+    secretName: elasticsearch-master-credentials
+    path: /usr/share/filebeat/secrets/
+
+# Filebeat configuration
+filebeatConfig:
+  filebeat.yml: |
+    filebeat.inputs:
+    - type: container
+      paths:
+        - /var/log/containers/*.log
+      processors:
+      - add_kubernetes_metadata:
+          host: ${NODE_NAME}
+          matchers:
+          - logs_path:
+              logs_path: "/var/log/containers/"
+      # Drop noisy/unwanted logs
+      - drop_event:
+          when:
+            or:
+              # Drop filebeat's own logs to prevent recursion
+              - equals:
+                  kubernetes.namespace: "kube-system"
+                  kubernetes.container.name: "filebeat"
+              # Drop metrics-server logs (too noisy)
+              - equals:
+                  kubernetes.namespace: "kube-system"
+                  kubernetes.container.name: "metrics-server"
+
+    # Send to Elasticsearch
+    output.elasticsearch:
+      hosts: ['https://elasticsearch-master.elastic-stack.svc:9200']
+      protocol: "https"
+      username: "elastic"
+      password: "${ELASTICSEARCH_PASSWORD}"
+      ssl.certificate_authorities:
+        - /usr/share/filebeat/certs/ca.crt
+
+      # Namespace-based index routing
+      # Allows different retention policies per namespace
+      indices:
+        # Default for logs without namespace metadata
+        - index: "logs-kubernetes-%{+yyyy.MM.dd}"
+          when.or:
+            - not:
+                has_fields: ['kubernetes.namespace']
+
+        # Security-sensitive namespaces get separate indices
+        # Replace with your actual security-related namespace names
+        - index: "logs-security-%{[kubernetes.namespace]}-%{+yyyy.MM.dd}"
+          when.or:
+            - equals:
+                kubernetes.namespace: "your-security-namespace-1"
+            - equals:
+                kubernetes.namespace: "your-security-namespace-2"
+            - equals:
+                kubernetes.namespace: "your-security-namespace-3"
+
+        # All other application logs
+        - index: "logs-app-%{[kubernetes.namespace]}-%{+yyyy.MM.dd}"
+
+    # Index Lifecycle Management (ILM) settings
+    # Automatically manages index rollover and retention
+    setup.ilm.enabled: true
+    setup.ilm.rollover_alias: "filebeat"
+    setup.ilm.pattern: "{now/d}-000001"
+    setup.template.name: "filebeat"
+    setup.template.pattern: "logs-*"
+    setup.template.settings:
+      index.number_of_shards: 1
+      # No replicas needed for single-node deployment
+      index.number_of_replicas: 0
+
+# Health checks
+readinessProbe:
+  failureThreshold: 3
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  successThreshold: 3
+  timeoutSeconds: 15
+
+# Note on data volume:
+# This deployment uses emptyDir for the data volume to prevent
+# lock file issues on pod restarts. This means the filebeat registry
+# (log file positions) is lost on pod restart, potentially causing
+# duplicate log entries. This trade-off is acceptable in homelab
+# environments where log deduplication is less critical than system stability.
+#
+# The volume configuration is applied via the DaemonSet after deployment:
+# kubectl patch daemonset filebeat-filebeat -n elastic-stack \
+#   --type='json' \
+#   -p='[{"op": "replace", "path": "/spec/template/spec/volumes/3", "value": {"name": "data", "emptyDir": {}}}]'

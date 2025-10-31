@@ -1,0 +1,106 @@
+---
+# Elasticsearch Helm Chart Values
+# Optimized for single-node Kubernetes homelab deployment
+# Reference: https://github.com/elastic/helm-charts/tree/main/elasticsearch
+
+clusterName: "elasticsearch"
+nodeGroup: "master"
+
+# Elasticsearch roles for single-node deployment
+roles:
+  - master
+  - data
+  - data_content
+  - data_hot
+  - data_warm
+  - data_cold
+  - ingest
+  - ml
+  - remote_cluster_client
+  - transform
+
+replicas: 1
+minimumMasterNodes: 1
+
+# Resource allocation (adjusted after monitoring actual usage)
+# Initial deployment: 2Gi RAM was insufficient
+# Final: 4Gi provides 2GB heap + 2GB for OS/Lucene cache
+resources:
+  requests:
+    cpu: "1000m"
+    memory: "4Gi"
+  limits:
+    cpu: "1000m"
+    memory: "4Gi"
+
+# Java heap size: 50% of total memory for optimal performance
+# Remaining 50% used by OS file cache for Lucene segments
+esJavaOpts: "-Xmx2g -Xms2g"
+
+# Persistent storage
+# Storage sizing guide:
+# - Base formula: (daily_log_volume_GB × retention_days) × 1.1 (10% overhead)
+# - Elasticsearch overhead: ~15-20% for indices, mappings, etc.
+# - Example calculation for this deployment:
+#   * ~300MB/day raw logs × 30 days = 9GB
+#   * With overhead: 9GB × 1.35 = ~12GB actual usage
+#   * Allocated 50Gi for growth headroom (4x current usage)
+#
+# To estimate YOUR storage needs:
+# 1. Run for 24h and check: kubectl exec elasticsearch-master-0 -n elastic-stack -- \
+#    curl -s -k -u "elastic:PASSWORD" https://localhost:9200/_cat/indices?v&s=store.size:desc
+# 2. Multiply daily growth by retention period
+# 3. Add 50% buffer for overhead and growth
+# 4. Minimum recommended: 20Gi for small homelabs
+volumeClaimTemplate:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi  # Adjust based on your log volume (see calculation above)
+
+# Security settings
+secret:
+  enabled: true
+  password: "changeme"  # CHANGE THIS IN PRODUCTION
+
+# Single-node optimization
+antiAffinity: "hard"
+
+protocol: https
+httpPort: 9200
+transportPort: 9300
+
+# Security hardening - run as non-root
+podSecurityContext:
+  fsGroup: 1000
+  runAsUser: 1000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# sysctl settings for Elasticsearch
+sysctlInitContainer:
+  enabled: true
+
+sysctlVmMaxMapCount: 262144
+
+# Health checks
+readinessProbe:
+  failureThreshold: 3
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  successThreshold: 3
+  timeoutSeconds: 5
+
+clusterHealthCheckParams: "wait_for_status=yellow&timeout=1s"
+
+# Image settings
+image: "docker.elastic.co/elasticsearch/elasticsearch"
+imageTag: "8.5.1"
+imagePullPolicy: "IfNotPresent"
+
+networkHost: "0.0.0.0"
