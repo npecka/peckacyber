@@ -27,6 +27,81 @@ By the end of this guide, you'll have:
 
 ---
 
+## Brief Background on the ELK Stack
+
+The ELK Stack (Elasticsearch, Logstash, Kibana) is a popular open-source solution for centralized logging and log analysis. In modern implementations, Filebeat often replaces Logstash as a more lightweight log shipper, making it the "EFK" stack.
+
+**Components:**
+- **Elasticsearch**: A distributed search and analytics engine that stores and indexes log data
+- **Filebeat**: A lightweight log shipper that collects logs from various sources and forwards them to Elasticsearch
+- **Kibana**: A visualization and exploration tool that provides a web interface for querying and visualizing data stored in Elasticsearch
+
+This stack is particularly valuable in Kubernetes environments where logs from hundreds of pods across multiple nodes need to be aggregated, searched, and analyzed from a single location.
+
+---
+
+## Use Cases for the ELK Stack
+
+### When to Use ELK/EFK
+
+**Ideal for:**
+- **Complex log analysis** - Full-text search across all log fields with powerful query language
+- **Multi-source aggregation** - Collecting logs from diverse sources (Kubernetes, applications, infrastructure)
+- **Historical analysis** - Investigating issues that occurred hours or days ago with fast search
+- **Security monitoring** - Correlating security events across multiple systems
+- **Compliance** - Retaining logs for audit requirements with search capabilities
+- **Dashboarding** - Creating visualizations and dashboards in Kibana for team visibility
+
+**Homelab use cases:**
+- Learning Kubernetes logging patterns
+- Troubleshooting application deployments
+- Monitoring security tools and experiments
+- Centralizing logs from multiple namespaces/projects
+- Building skills relevant to enterprise environments
+
+**Production use cases:**
+- Application performance monitoring (APM)
+- Security Information and Event Management (SIEM)
+- Infrastructure monitoring and alerting
+- Customer support troubleshooting
+- Business analytics from application logs
+
+### When NOT to Use ELK
+
+**Consider alternatives if:**
+
+**Resource-constrained environments:**
+- ELK requires significant resources (4GB+ RAM for Elasticsearch alone)
+- Alternative: **Grafana Loki** uses ~80% fewer resources for simple log aggregation
+- Trade-off: Loki is slower for full-text search but much lighter
+
+**Simple log viewing:**
+- If you just need to "tail" recent logs without complex queries
+- Alternative: **kubectl logs** or simple file-based logging
+- Trade-off: No centralization or historical search
+
+**Managed solutions preferred:**
+- If you don't want to maintain infrastructure
+- Alternative: **CloudWatch**, **Datadog**, **New Relic**, **Splunk Cloud**
+- Trade-off: Ongoing costs vs. self-hosted maintenance burden
+
+**Metric-focused monitoring:**
+- ELK is optimized for logs, not time-series metrics
+- Alternative: **Prometheus + Grafana** for metrics
+- Note: Many deployments use both (ELK for logs, Prometheus for metrics)
+
+### ELK vs Alternatives Comparison
+
+| Feature | ELK/EFK | Loki | Splunk | CloudWatch |
+|---------|---------|------|--------|------------|
+| **Cost** | Free (self-hosted) | Free (self-hosted) | Paid | Pay-per-use |
+| **Resource Usage** | High (4GB+) | Low (~500MB) | High | N/A (managed) |
+| **Full-Text Search** | Excellent | Slower | Excellent | Good |
+| **Complexity** | Moderate | Low | Moderate | Low |
+| **Best For** | Complex queries | Simple aggregation | Enterprise | AWS workloads |
+
+---
+
 ## Prerequisites
 
 **Required:**
@@ -136,7 +211,218 @@ kubectl exec elasticsearch-master-0 -n elastic-stack -- \
 
 ---
 
-## Step 1: Initial Elasticsearch Deployment
+## Quick Reference
+
+This section provides essential commands and information for managing your Elasticsearch deployment.
+
+### Important Endpoints and Ports
+
+- **Elasticsearch:** `https://elasticsearch-master.elastic-stack.svc:9200`
+- **Kibana:** `http://kibana-kibana.elastic-stack.svc:5601`
+- **Namespace:** `elastic-stack`
+
+### Default Credentials
+
+```bash
+# Get Elasticsearch password
+kubectl get secret elasticsearch-master-credentials \
+  -n elastic-stack -o jsonpath='{.data.password}' | base64 -d
+
+# Default username: elastic
+```
+
+### Common kubectl Commands
+
+**Check pod status:**
+```bash
+# All elastic-stack pods
+kubectl get pods -n elastic-stack
+
+# Watch for changes
+kubectl get pods -n elastic-stack -w
+
+# Check specific component
+kubectl get pods -n elastic-stack -l app=elasticsearch-master
+kubectl get pods -n elastic-stack -l app=kibana-kibana
+kubectl get pods -n elastic-stack -l app=filebeat-filebeat
+```
+
+**Check resource usage:**
+```bash
+# Pod resource consumption
+kubectl top pods -n elastic-stack
+
+# Node resource consumption
+kubectl top nodes
+```
+
+**View logs:**
+```bash
+# Elasticsearch logs
+kubectl logs elasticsearch-master-0 -n elastic-stack
+
+# Kibana logs
+kubectl logs deployment/kibana-kibana -n elastic-stack
+
+# Filebeat logs (specific pod)
+kubectl logs <filebeat-pod-name> -n elastic-stack
+
+# Follow logs in real-time
+kubectl logs -f elasticsearch-master-0 -n elastic-stack
+```
+
+**Access services locally:**
+```bash
+# Port-forward Elasticsearch
+kubectl port-forward svc/elasticsearch-master 9200:9200 -n elastic-stack
+
+# Port-forward Kibana
+kubectl port-forward svc/kibana-kibana 5601:5601 -n elastic-stack
+
+# Then access:
+# Elasticsearch: https://localhost:9200
+# Kibana: http://localhost:5601
+```
+
+### Elasticsearch API Commands
+
+**Cluster health:**
+```bash
+# Get password first
+ELASTIC_PASSWORD=$(kubectl get secret elasticsearch-master-credentials \
+  -n elastic-stack -o jsonpath='{.data.password}' | base64 -d)
+
+# Check cluster health
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cluster/health?pretty"
+
+# Cluster stats
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cluster/stats?pretty"
+```
+
+**Index management:**
+```bash
+# List all indices
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cat/indices?v"
+
+# List indices sorted by size
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cat/indices?v&s=store.size:desc"
+
+# List indices sorted by creation date
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cat/indices?v&s=creation.date:desc"
+
+# Delete specific index
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  -X DELETE "https://localhost:9200/index-name"
+```
+
+**Node information:**
+```bash
+# Node stats
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cat/nodes?v"
+
+# JVM memory usage
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_nodes/stats/jvm?pretty"
+```
+
+### Helm Commands
+
+**Check current deployments:**
+```bash
+# List Helm releases in namespace
+helm list -n elastic-stack
+
+# Get values for a release
+helm get values elasticsearch -n elastic-stack
+helm get values kibana -n elastic-stack
+helm get values filebeat -n elastic-stack
+```
+
+**Upgrade deployments:**
+```bash
+# Upgrade Elasticsearch
+helm upgrade elasticsearch elastic/elasticsearch \
+  -f elasticsearch-values.yaml \
+  -n elastic-stack
+
+# Upgrade Kibana
+helm upgrade kibana elastic/kibana \
+  -f kibana-values.yaml \
+  -n elastic-stack
+
+# Upgrade Filebeat
+helm upgrade filebeat elastic/filebeat \
+  -f filebeat-values.yaml \
+  -n elastic-stack
+```
+
+**Rollback if needed:**
+```bash
+# See release history
+helm history elasticsearch -n elastic-stack
+
+# Rollback to previous version
+helm rollback elasticsearch -n elastic-stack
+
+# Rollback to specific revision
+helm rollback elasticsearch 2 -n elastic-stack
+```
+
+### Quick Troubleshooting Commands
+
+**Pod won't start:**
+```bash
+# Describe pod to see events
+kubectl describe pod <pod-name> -n elastic-stack
+
+# Check PVC status
+kubectl get pvc -n elastic-stack
+
+# Check node resources
+kubectl top nodes
+```
+
+**Performance issues:**
+```bash
+# Check resource usage
+kubectl top pods -n elastic-stack
+
+# Check Elasticsearch heap usage
+kubectl exec elasticsearch-master-0 -n elastic-stack -- \
+  curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_nodes/stats/jvm?pretty"
+
+# Check index count (too many can slow things down)
+curl -k -u "elastic:${ELASTIC_PASSWORD}" \
+  "https://localhost:9200/_cat/indices?v" | wc -l
+```
+
+**Restart components:**
+```bash
+# Restart Elasticsearch (StatefulSet - restarts in order)
+kubectl rollout restart statefulset/elasticsearch-master -n elastic-stack
+
+# Restart Kibana
+kubectl rollout restart deployment/kibana-kibana -n elastic-stack
+
+# Restart Filebeat
+kubectl rollout restart daemonset/filebeat-filebeat -n elastic-stack
+```
+
+### Configuration File Locations
+
+- Local values files: `elasticsearch-values.yaml`, `kibana-values.yaml`, `filebeat-values.yaml`
+- See the **References and Additional Resources** section at the end of this guide for GitHub repository links
+
+---
+
+## Elastic Deployment
 
 ### Overview
 Deploy Elasticsearch as a StatefulSet with persistent storage. This initial deployment uses conservative resource estimates that we'll adjust later based on actual usage. The yaml will deploy Elasticsearch in single-node mode.
@@ -286,7 +572,7 @@ Expected response:
 
 ---
 
-## Step 2: Deploy Kibana
+## Kibana Deployment
 
 ### Overview
 Kibana provides the web interface for querying and visualizing logs stored in Elasticsearch.
@@ -396,7 +682,7 @@ Navigate to `http://localhost:5601` in your browser. Login with:
 
 ---
 
-## Step 3: Deploy Filebeat Log Shipper
+## Filebeat Deployment
 
 ### Overview
 Filebeat runs as a DaemonSet on each node, collecting container logs and shipping them to Elasticsearch.
@@ -579,7 +865,7 @@ yellow open   logs-app-default-2025.10.29 1   0       5678
 
 ---
 
-## Step 4: Monitoring and Observation Period
+## Baking Period and Monitoring
 
 ### Overview
 After initial deployment, I let the system run for several weeks to understand actual usage patterns and identify issues.
@@ -668,9 +954,10 @@ filebeat-filebeat-yyy      45m    95Mi
 
 ---
 
-## Step 5: Troubleshooting with AI Assistance
+## Utilizing AI to Enhance Deployment
 
-### Overview
+### Observing Findings with AI
+
 At this point, I engaged Claude AI to help diagnose and fix these issues. This section documents that workflow and what we discovered.
 
 ### The AI-Assisted Workflow
@@ -705,14 +992,16 @@ curl -k -u "elastic:${ELASTIC_PASSWORD}" \
 - Validated each fix before moving to next
 - Documented decisions and findings
 
----
+### Mitigating Findings Suggested by AI
 
-## Step 6: Fix #1 - Backup Strategy (Velero + MinIO)
+The following sections detail each fix that was implemented based on AI-assisted troubleshooting.
 
-### Overview
+#### Fix #1 - Backup Strategy (Velero + MinIO)
+
+**Overview:**
 Before making any risky configuration changes, I established a disaster recovery strategy using Velero to back up the Elasticsearch data to MinIO running on my NAS.
 
-### Implementation Note
+**Implementation Note:**
 This guide focuses on Elasticsearch optimization, so I won't detail the full Velero/MinIO setup here. That will be covered in a dedicated backup guide. However, the key points:
 
 - **Velero** installed in the cluster for Kubernetes backup/restore
@@ -732,11 +1021,9 @@ velero backup get
 velero backup describe <backup-name> --details
 ```
 
----
+#### Fix #2 - Filebeat Crash Loop (emptyDir)
 
-## Step 7: Fix #2 - Filebeat Crash Loop (emptyDir)
-
-### Root Cause
+**Root Cause:**
 Filebeat was using a `hostPath` volume for data persistence:
 
 ```yaml
@@ -750,7 +1037,7 @@ volumes:
 
 When Filebeat containers crashed, lock files remained on the host filesystem, preventing new containers from starting.
 
-### The Fix
+**The Fix:**
 
 Changed to `emptyDir` volume type:
 
@@ -770,22 +1057,22 @@ volumes:
     emptyDir: {}  # ← The fix!
 ```
 
-### Trade-offs
+**Trade-offs:**
 
-**Pro:**
+Pro:
 - Clean restarts, no more crash loops
 - Lock files cleared on pod restart
 
-**Con:**
+Con:
 - Registry state (log file positions) lost on restart
 - Potential duplicate logs after restart
 
-**Why acceptable:**
+Why acceptable:
 - Logs are backed up to NAS
 - Occasional duplicates preferable to non-functional system
 - Homelab context (not financial transactions)
 
-### Result
+**Result:**
 
 ```bash
 $ kubectl get pods -n elastic-stack -l app=filebeat-filebeat
@@ -797,11 +1084,9 @@ filebeat-filebeat-def34   1/1     Running   0          2d
 
 Zero restarts since October 29, 2025!
 
----
+#### Fix #3 - Elasticsearch Resource Sizing
 
-## Step 8: Fix #3 - Elasticsearch Resource Sizing
-
-### The Problem
+**The Problem:**
 
 Initial allocation was conservative guesswork:
 - Allocated: 2Gi RAM
@@ -810,7 +1095,7 @@ Initial allocation was conservative guesswork:
 
 This caused performance issues and risk of OOM kills.
 
-### The Analysis
+**The Analysis:**
 
 Elasticsearch needs memory for:
 1. **Java heap** - Core operations (indexing, search)
@@ -818,7 +1103,7 @@ Elasticsearch needs memory for:
 
 Best practice: 50/50 split between heap and file cache.
 
-### The Fix
+**The Fix:**
 
 Updated resource allocation to match reality:
 
@@ -854,7 +1139,7 @@ helm upgrade elasticsearh elastic/elasticsearch \
   -n elastic-stack
 ```
 
-### Result
+**Result:**
 
 ```bash
 $ kubectl top pod elasticsearch-master-0 -n elastic-stack
@@ -865,18 +1150,16 @@ elasticsearch-master-0   823m   2760Mi  # Now within limits!
 
 Stable operation with no OOM events.
 
----
+#### Fix #4 - Index Lifecycle Management (ILM)
 
-## Step 9: Fix #4 - Index Lifecycle Management (ILM)
-
-### The Problem
+**The Problem:**
 
 500+ indices accumulated with no cleanup strategy:
 - Daily indices never deleted
 - Storage growing unbounded
 - Performance degradation from too many indices
 
-### The Solution
+**The Solution:**
 
 Enabled ILM in Filebeat configuration:
 
@@ -915,14 +1198,13 @@ indices:
   - index: "logs-app-%{[kubernetes.namespace]}-%{+yyyy.MM.dd}"
 ```
 
-### Benefits
-
+**Benefits:**
 - **Organized indices** - Security logs separate from app logs
 - **Automated rollover** - Daily indices managed automatically
 - **Custom retention** - Can set different retention per namespace
 - **Better performance** - Fewer indices to search across
 
-### Applied the fix
+**Applied the fix:**
 
 ```bash
 # Update Filebeat configuration
@@ -936,7 +1218,7 @@ kubectl rollout restart daemonset filebeat-filebeat -n elastic-stack
 
 ---
 
-## Step 10: Security Hardening
+## Security Hardening
 
 ### Overview
 Applied least-privilege security settings to all components.
@@ -1001,52 +1283,52 @@ This is "defense in depth" - even if the application is compromised, the blast r
 
 ---
 
-## Measurable Results
+## Results and Key Takeaways
 
-### Before Optimization
+### Measurable Results
+
+**Before Optimization:**
 - **Filebeat:** 100+ restarts, crash loop
 - **Elasticsearch:** 2Gi RAM (insufficient), OOM risk
 - **Indices:** 500+ unmanaged indices, no lifecycle
 - **Backup:** No strategy
 - **Operations:** Manual, reactive troubleshooting
 
-### After Implementation
+**After Implementation:**
 - **Filebeat:** 0 restarts, stable
 - **Elasticsearch:** 4Gi RAM, stable operation
 - **Indices:** Organized by namespace with ILM
 - **Backup:** Velero + MinIO automated backups to NAS
 - **Operations:** Documented, reproducible
 
-### Resource Impact
+**Resource Impact:**
 - **Eliminated:** 100+ crashes per week
 - **Prevented:** OOM kills via proper memory allocation
 - **Improved:** Query performance through ILM
 - **Saved:** ~4 hours/week troubleshooting time
 
-### System Stats (Example Deployment)
+**System Stats (Example Deployment):**
 - **Daily log volume:** ~300MB/day
 - **Retention period:** 30 days
 - **Storage used:** ~12GB (with Elasticsearch overhead)
 - **Uptime:** Stable since fixes applied
 - **Log sources:** Multiple namespaces (kube-system, security monitoring, CI/CD, application workloads, etc.)
 
----
+### Key Takeaways
 
-## Key Takeaways
-
-### 1. Monitor Before Optimizing
+**1. Monitor Before Optimizing**
 Running the system for 2-3 weeks revealed actual usage patterns. Initial resource guesses were 50% off - real data is essential.
 
-### 2. One Change at a Time
+**2. One Change at a Time**
 Each fix was applied individually and validated. This made it easy to identify what worked and simplified rollback if needed.
 
-### 3. Context Matters More Than "Best Practices"
+**3. Context Matters More Than "Best Practices"**
 The emptyDir solution isn't what production guides recommend, but it was perfect for my homelab where occasional duplicate logs are acceptable. Understand your constraints.
 
-### 4. Document Everything
+**4. Document Everything**
 Creating detailed documentation of changes - what was changed, why, and what trade-offs were accepted - is invaluable for future troubleshooting and knowledge sharing.
 
-### 5. AI as a Force Multiplier
+**5. AI as a Force Multiplier**
 Using Claude AI accelerated troubleshooting by correlating error messages across Kubernetes, Elasticsearch, and Filebeat domains simultaneously. However, I still made all decisions and validated everything in my environment.
 
 **AI helped with:**
@@ -1064,7 +1346,7 @@ Using Claude AI accelerated troubleshooting by correlating error messages across
 
 ---
 
-## The Modern Operations Workflow
+## AI Tips for Operations
 
 ### How to Use AI Tools Effectively
 
@@ -1096,26 +1378,6 @@ kubectl top pods -n <namespace>
 - Explain why you chose this approach
 - Note trade-offs accepted
 - Include verification steps
-
----
-
-## Deployment File References
-
-All configurations discussed in this guide are currently deployed and can be found:
-
-**Cluster (source of truth):**
-- Elasticsearch: `kubectl get statefulset elasticsearch-master -n elastic-stack -o yaml`
-- Kibana: `kubectl get deployment kibana-kibana -n elastic-stack -o yaml`
-- Filebeat: `kubectl get daemonset filebeat-filebeat -n elastic-stack -o yaml`
-- Filebeat config: `kubectl get configmap filebeat-filebeat-daemonset-config -n elastic-stack -o yaml`
-
-**GitHub Repository:**
-All configuration files referenced in this guide are available at:
-https://github.com/npecka/peckacyber/tree/main/guides/elasticsearch-k8s-optimization
-
-- [elasticsearch-values.yaml](https://github.com/npecka/peckacyber/blob/main/guides/elasticsearch-k8s-optimization/elasticsearch-values.yaml)
-- [kibana-values.yaml](https://github.com/npecka/peckacyber/blob/main/guides/elasticsearch-k8s-optimization/kibana-values.yaml)
-- [filebeat-values.yaml](https://github.com/npecka/peckacyber/blob/main/guides/elasticsearch-k8s-optimization/filebeat-values.yaml)
 
 ---
 
@@ -1181,7 +1443,7 @@ https://github.com/npecka/peckacyber/tree/main/guides/elasticsearch-k8s-optimiza
 
 ---
 
-## Next Steps
+## Future Considerations
 
 After completing this deployment:
 
@@ -1224,9 +1486,42 @@ After completing this deployment:
 
 ---
 
-## Security Considerations
+## References and Additional Resources
 
-### What to Share with AI Tools
+### Deployment File References
+
+All configurations discussed in this guide are currently deployed and can be found:
+
+**Cluster (source of truth):**
+- Elasticsearch: `kubectl get statefulset elasticsearch-master -n elastic-stack -o yaml`
+- Kibana: `kubectl get deployment kibana-kibana -n elastic-stack -o yaml`
+- Filebeat: `kubectl get daemonset filebeat-filebeat -n elastic-stack -o yaml`
+- Filebeat config: `kubectl get configmap filebeat-filebeat-daemonset-config -n elastic-stack -o yaml`
+
+**GitHub Repository:**
+All configuration files referenced in this guide are available at:
+https://github.com/npecka/peckacyber/tree/main/guides/elasticsearch-k8s-optimization
+
+- [elasticsearch-values.yaml](https://github.com/npecka/peckacyber/blob/main/guides/elasticsearch-k8s-optimization/elasticsearch-values.yaml)
+- [kibana-values.yaml](https://github.com/npecka/peckacyber/blob/main/guides/elasticsearch-k8s-optimization/kibana-values.yaml)
+- [filebeat-values.yaml](https://github.com/npecka/peckacyber/blob/main/guides/elasticsearch-k8s-optimization/filebeat-values.yaml)
+
+### Additional Resources
+
+- **Elasticsearch on Kubernetes:** https://www.elastic.co/guide/en/cloud-on-k8s/current/index.html
+- **Filebeat Configuration:** https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-reference-yml.html
+- **ILM Policies:** https://www.elastic.co/guide/en/elasticsearch/reference/current/index-lifecycle-management.html
+- **Kubernetes Best Practices:** https://kubernetes.io/docs/concepts/configuration/overview/
+- **Claude AI:** https://claude.ai/
+
+**Related Guides on This Site:**
+- Coming soon: "Kubernetes Backup Strategy: Velero + MinIO for Homelabs"
+- Coming soon: "Migrating from Elasticsearch to Loki for Cost Savings"
+- Coming soon: "AI-Assisted Kubernetes Operations: A Workflow Guide"
+
+### Security Considerations
+
+**What to Share with AI Tools:**
 
 **Safe to share:**
 - Error messages
@@ -1249,7 +1544,7 @@ password: "${ELASTICSEARCH_PASSWORD}"  # Reference only
 password: "actualP@ssw0rd123"
 ```
 
-### Production Hardening
+**Production Hardening:**
 
 For production deployments, additionally consider:
 
@@ -1259,21 +1554,6 @@ For production deployments, additionally consider:
 4. **TLS everywhere** - Inter-node communication encryption
 5. **Audit logging** - Track all Elasticsearch access
 6. **Regular patching** - Keep Elastic Stack up to date
-
----
-
-## Additional Resources
-
-- **Elasticsearch on Kubernetes:** https://www.elastic.co/guide/en/cloud-on-k8s/current/index.html
-- **Filebeat Configuration:** https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-reference-yml.html
-- **ILM Policies:** https://www.elastic.co/guide/en/elasticsearch/reference/current/index-lifecycle-management.html
-- **Kubernetes Best Practices:** https://kubernetes.io/docs/concepts/configuration/overview/
-- **Claude AI:** https://claude.ai/
-
-**Related Guides on This Site:**
-- Coming soon: "Kubernetes Backup Strategy: Velero + MinIO for Homelabs"
-- Coming soon: "Migrating from Elasticsearch to Loki for Cost Savings"
-- Coming soon: "AI-Assisted Kubernetes Operations: A Workflow Guide"
 
 ---
 
